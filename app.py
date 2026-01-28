@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 
 DB_CONFIG = {
-    "host": "aws-0-eu-central-1.pooler.supabase.com",  # pooler host
+    "host": "aws-1-eu-central-1.pooler.supabase.com",  # pooler host
     "port": 6543,
     "dbname": "postgres",
     "user": "postgres.eczwohofchcczicmtlsp",
