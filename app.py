@@ -4,7 +4,7 @@ import pandas as pd
 
 DB_CONFIG = {
     "host": "aws-0-eu-central-1.pooler.supabase.com",  # pooler host
-    "port": 5432,
+    "port": 6543,
     "dbname": "postgres",
     "user": "postgres",
     "password": st.secrets["DB_PASSWORD"],
