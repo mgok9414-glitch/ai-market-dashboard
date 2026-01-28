@@ -10,7 +10,7 @@ st.set_page_config(page_title="AI Market Dashboard", layout="wide")
 def get_conn():
     return psycopg2.connect(
         host=st.secrets["DB_HOST"],
-        port=int(st.secrets["DB_PORT"]),
+        port=6543,
         dbname=st.secrets["DB_NAME"],
         user=st.secrets["DB_USER"],
         password=st.secrets["DB_PASSWORD"],
