@@ -6,7 +6,7 @@ DB_CONFIG = {
     "host": "aws-0-eu-central-1.pooler.supabase.com",  # pooler host
     "port": 6543,
     "dbname": "postgres",
-    "user": "postgres.eczwohofchcczicmtlsp",
+    "user": "postgres.apbkobhfnmcqqzqeeqss",
     "password": st.secrets["DB_PASSWORD"],
     "sslmode": "require"
 }
