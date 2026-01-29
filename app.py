@@ -45,7 +45,31 @@ def load_analysis():
     )
 
     conn.close()
+    return df@st.cache_data(ttl=300)
+def load_analysis():
+    conn = psycopg2.connect(**DB_CONFIG)
+
+    df = pd.read_sql(
+        """
+        SELECT
+            asset,
+            impact_score,
+            sentiment,
+            summary,
+            created_at
+        FROM analysis
+        ORDER BY created_at DESC
+        """,
+        conn
+    )
+
+    conn.close()
+
+    # 🔑 KRİTİK SATIR (HATAYI BİTİREN)
+    df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+
     return df
+
 
 
 df = load_analysis()
@@ -97,6 +121,10 @@ st.divider()
 # =========================
 # IMPACT SCORE OVER TIME
 # =========================
+if df.empty:
+    st.warning("Henüz analiz verisi yok. n8n akışı çalıştıktan sonra grafikler görünecek.")
+    st.stop()
+
 st.subheader("📈 Etki Skoru Zaman Serisi")
 
 impact_time = (
