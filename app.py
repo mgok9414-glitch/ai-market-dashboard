@@ -1,185 +1,134 @@
 import streamlit as st
-import psycopg2
 import pandas as pd
-import plotly.express as px
+import psycopg2
+import json
 
-# =========================
-# PAGE CONFIG
-# =========================
-st.set_page_config(
-    page_title="AI Market Dashboard",
-    layout="wide"
+st.set_page_config(page_title="AI Market Dashboard", layout="wide")
+
+# ========================
+# DATABASE CONNECTION
+# ========================
+
+conn = psycopg2.connect(
+    host=st.secrets["DB_HOST"],
+    port=st.secrets["DB_PORT"],
+    database=st.secrets["DB_NAME"],
+    user=st.secrets["DB_USER"],
+    password=st.secrets["DB_PASSWORD"]
 )
 
-# =========================
-# DATABASE CONFIG
-# =========================
-DB_CONFIG = {
-    "host": "aws-1-eu-central-1.pooler.supabase.com",
-    "port": 6543,
-    "dbname": "postgres",
-    "user": "postgres.eczwohofchcczicmtlsp",
-    "password": st.secrets["DB_PASSWORD"],
-    "sslmode": "require"
-}
-
-# =========================
+# ========================
 # LOAD DATA
-# =========================
-@st.cache_data(ttl=300)
+# ========================
+
+@st.cache_data
 def load_analysis():
-    conn = psycopg2.connect(**DB_CONFIG)
 
-    df = pd.read_sql(
-        """
-        SELECT
-            asset,
-            impact_score,
-            sentiment,
-            summary,
-            created_at
-        FROM analysis
-        ORDER BY created_at DESC
-        """,
-        conn
-    )
+    query = """
+    SELECT
+        id,
+        summary,
+        affected_assets,
+        risk_notes,
+        model,
+        created_at
+    FROM public.analysis
+    ORDER BY created_at DESC
+    """
 
-    conn.close()
-    return df@st.cache_data(ttl=300)
-def load_analysis():
-    conn = psycopg2.connect(**DB_CONFIG)
-
-    df = pd.read_sql(
-        """
-        SELECT
-            asset,
-            impact_score,
-            sentiment,
-            summary,
-            created_at
-        FROM analysis
-        ORDER BY created_at DESC
-        """,
-        conn
-    )
-
-    conn.close()
-
-    # 🔑 KRİTİK SATIR (HATAYI BİTİREN)
-    df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+    df = pd.read_sql(query, conn)
 
     return df
 
-
-
 df = load_analysis()
 
-# =========================
-# SIDEBAR FILTERS
-# =========================
-st.sidebar.title("🔍 Filtreler")
+# ========================
+# EMPTY CHECK
+# ========================
 
-asset_filter = st.sidebar.multiselect(
-    "Varlık Seç",
-    options=sorted(df["asset"].unique()),
-    default=sorted(df["asset"].unique())
-)
-
-sentiment_filter = st.sidebar.multiselect(
-    "Sentiment",
-    options=sorted(df["sentiment"].unique()),
-    default=sorted(df["sentiment"].unique())
-)
-
-df = df[
-    (df["asset"].isin(asset_filter)) &
-    (df["sentiment"].isin(sentiment_filter))
-]
-
-# =========================
-# HEADER METRICS
-# =========================
-col1, col2, col3 = st.columns(3)
-
-col1.metric(
-    "Toplam Haber",
-    len(df)
-)
-
-col2.metric(
-    "Ortalama Etki Skoru",
-    round(df["impact_score"].mean(), 2) if not df.empty else 0
-)
-
-col3.metric(
-    "Takip Edilen Varlık",
-    df["asset"].nunique()
-)
-
-st.divider()
-
-# =========================
-# IMPACT SCORE OVER TIME
-# =========================
 if df.empty:
-    st.warning("Henüz analiz verisi yok. n8n akışı çalıştıktan sonra grafikler görünecek.")
+    st.warning("Henüz analiz verisi yok.")
     st.stop()
 
-st.subheader("📈 Etki Skoru Zaman Serisi")
+# ========================
+# HEADER
+# ========================
 
-impact_time = (
-    df
-    .groupby(pd.Grouper(key="created_at", freq="D"))
-    .impact_score
-    .mean()
-    .reset_index()
-)
+st.title("📊 AI Piyasa Analiz Dashboard")
 
-fig_time = px.line(
-    impact_time,
-    x="created_at",
-    y="impact_score",
-    markers=True
-)
+latest = df.iloc[0]
 
-st.plotly_chart(fig_time, use_container_width=True)
+# ========================
+# SUMMARY
+# ========================
 
-# =========================
-# SENTIMENT DISTRIBUTION
-# =========================
-st.subheader("🧠 Sentiment Dağılımı")
+st.subheader("🧠 Son Piyasa Özeti")
+st.write(latest["summary"])
 
-fig_sentiment = px.pie(
-    df,
-    names="sentiment",
-    hole=0.4
-)
+# ========================
+# PARSE ASSETS JSON
+# ========================
 
-st.plotly_chart(fig_sentiment, use_container_width=True)
+assets_rows = []
 
-# =========================
-# TOP ASSETS BY IMPACT
-# =========================
-st.subheader("🔥 En Yüksek Etkili Varlıklar")
+for _, row in df.iterrows():
 
-top_assets = (
-    df.groupby("asset")
-    .impact_score.mean()
-    .sort_values(ascending=False)
-    .head(10)
-    .reset_index()
-)
+    if row["affected_assets"] is None:
+        continue
 
-fig_assets = px.bar(
-    top_assets,
-    x="asset",
-    y="impact_score"
-)
+    assets = row["affected_assets"]
 
-st.plotly_chart(fig_assets, use_container_width=True)
+    if isinstance(assets, str):
+        assets = json.loads(assets)
 
-# =========================
-# RAW DATA
-# =========================
-with st.expander("📄 Ham Veriyi Göster"):
-    st.dataframe(df, use_container_width=True)
+    for asset in assets:
+        assets_rows.append({
+            "asset": asset.get("asset"),
+            "sentiment": asset.get("sentiment"),
+            "impact_score": asset.get("impact_score"),
+            "created_at": row["created_at"]
+        })
+
+assets_df = pd.DataFrame(assets_rows)
+
+# ========================
+# GRAPH: IMPACT SCORE
+# ========================
+
+if not assets_df.empty:
+
+    st.subheader("📈 Varlık Etki Skorları")
+
+    pivot_df = (
+        assets_df
+        .pivot_table(
+            index="created_at",
+            columns="asset",
+            values="impact_score",
+            aggfunc="mean"
+        )
+        .sort_index()
+    )
+
+    st.line_chart(pivot_df)
+
+# ========================
+# RISK NOTES
+# ========================
+
+st.subheader("⚠️ Risk Notları")
+
+risks = latest["risk_notes"]
+
+if isinstance(risks, str):
+    risks = json.loads(risks)
+
+for r in risks:
+    st.write(f"- {r}")
+
+# ========================
+# RAW TABLE
+# ========================
+
+st.subheader("📋 Tüm Analiz Kayıtları")
+st.dataframe(df)
