@@ -37,14 +37,10 @@ def load_analysis():
     """
 
     df = pd.read_sql(query, conn)
-
     return df
 
-df = load_analysis()
 
-# ========================
-# EMPTY CHECK
-# ========================
+df = load_analysis()
 
 if df.empty:
     st.warning("Henüz analiz verisi yok.")
@@ -59,14 +55,7 @@ st.title("📊 AI Piyasa Analiz Dashboard")
 latest = df.iloc[0]
 
 # ========================
-# SUMMARY
-# ========================
-
-st.subheader("🧠 Son Piyasa Özeti")
-st.write(latest["summary"])
-
-# ========================
-# PARSE ASSETS JSON
+# FILTER - ASSET DROPDOWN
 # ========================
 
 assets_rows = []
@@ -92,6 +81,30 @@ for _, row in df.iterrows():
 assets_df = pd.DataFrame(assets_rows)
 
 # ========================
+# ASSET FILTER UI
+# ========================
+
+selected_assets = None
+
+if not assets_df.empty:
+    unique_assets = sorted(assets_df["asset"].dropna().unique())
+
+    selected_assets = st.multiselect(
+        "🔎 Varlık Filtresi",
+        unique_assets,
+        default=unique_assets
+    )
+
+    assets_df = assets_df[assets_df["asset"].isin(selected_assets)]
+
+# ========================
+# SUMMARY
+# ========================
+
+st.subheader("🧠 Son Piyasa Özeti")
+st.write(latest["summary"])
+
+# ========================
 # GRAPH: IMPACT SCORE
 # ========================
 
@@ -111,6 +124,57 @@ if not assets_df.empty:
     )
 
     st.line_chart(pivot_df)
+
+# ========================
+# SENTIMENT HEATMAP
+# ========================
+
+if not assets_df.empty:
+
+    st.subheader("🔥 Sentiment Heatmap")
+
+    sentiment_map = {
+        "positive": 1,
+        "neutral": 0,
+        "negative": -1
+    }
+
+    heat_df = assets_df.copy()
+    heat_df["sentiment_score"] = heat_df["sentiment"].map(sentiment_map)
+
+    heat_pivot = (
+        heat_df
+        .pivot_table(
+            index="created_at",
+            columns="asset",
+            values="sentiment_score",
+            aggfunc="mean"
+        )
+        .sort_index()
+    )
+
+    st.dataframe(heat_pivot)
+
+# ========================
+# DAILY IMPACT METRIC
+# ========================
+
+if not assets_df.empty:
+
+    st.subheader("📊 Günlük Ortalama Etki Skoru")
+
+    daily_df = assets_df.copy()
+    daily_df["date"] = pd.to_datetime(daily_df["created_at"]).dt.date
+
+    metric_df = (
+        daily_df
+        .groupby("date")["impact_score"]
+        .mean()
+        .reset_index()
+        .set_index("date")
+    )
+
+    st.line_chart(metric_df)
 
 # ========================
 # RISK NOTES
