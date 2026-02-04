@@ -1,198 +1,200 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
-import json
+import plotly.express as px
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="AI Market Dashboard", layout="wide")
 
-# ========================
+# -----------------------
 # DATABASE CONNECTION
-# ========================
+# -----------------------
 
-conn = psycopg2.connect(
-    host=st.secrets["DB_HOST"],
-    port=st.secrets["DB_PORT"],
-    database=st.secrets["DB_NAME"],
-    user=st.secrets["DB_USER"],
-    password=st.secrets["DB_PASSWORD"]
-)
+DB_CONFIG = {
+    "host": st.secrets["DB_HOST"],
+    "database": st.secrets["DB_NAME"],
+    "user": st.secrets["DB_USER"],
+    "password": st.secrets["DB_PASSWORD"],
+    "port": st.secrets["DB_PORT"]
+}
 
-# ========================
-# LOAD DATA
-# ========================
 
-@st.cache_data
+@st.cache_data(ttl=600)
 def load_analysis():
+    conn = psycopg2.connect(**DB_CONFIG)
 
     query = """
     SELECT
-        id,
+        created_at,
         summary,
-        affected_assets,
-        risk_notes,
-        model,
-        created_at
-    FROM public.analysis
+        affected_assets
+    FROM analysis
     ORDER BY created_at DESC
     """
 
     df = pd.read_sql(query, conn)
+    conn.close()
+
     return df
 
 
 df = load_analysis()
 
+st.title("📊 AI Market Intelligence Dashboard")
+
 if df.empty:
-    st.warning("Henüz analiz verisi yok.")
+    st.warning("Analysis tablosunda veri yok.")
     st.stop()
 
-# ========================
-# HEADER
-# ========================
+# -----------------------
+# JSON PARSE
+# -----------------------
 
-st.title("📊 AI Piyasa Analiz Dashboard")
-
-latest = df.iloc[0]
-
-# ========================
-# FILTER - ASSET DROPDOWN
-# ========================
-
-assets_rows = []
+rows = []
 
 for _, row in df.iterrows():
+    created = pd.to_datetime(row["created_at"])
 
-    if row["affected_assets"] is None:
-        continue
+    if isinstance(row["affected_assets"], list):
+        for asset in row["affected_assets"]:
 
-    assets = row["affected_assets"]
+            rows.append({
+                "date": created,
+                "asset": asset.get("asset"),
+                "type": asset.get("asset_type"),
+                "sentiment": asset.get("sentiment"),
+                "impact_score": float(asset.get("impact_score", 0))
+            })
 
-    if isinstance(assets, str):
-        assets = json.loads(assets)
+assets_df = pd.DataFrame(rows)
 
-    for asset in assets:
-        assets_rows.append({
-            "asset": asset.get("asset"),
-            "sentiment": asset.get("sentiment"),
-            "impact_score": asset.get("impact_score"),
-            "created_at": row["created_at"]
-        })
+if assets_df.empty:
+    st.warning("Asset verisi yok.")
+    st.stop()
 
-assets_df = pd.DataFrame(assets_rows)
+# -----------------------
+# SENTIMENT NUMERIC SCORE
+# -----------------------
 
-# ========================
-# ASSET FILTER UI
-# ========================
+sentiment_map = {
+    "positive": 1,
+    "neutral": 0,
+    "negative": -1
+}
 
-selected_assets = None
+assets_df["sentiment_score"] = assets_df["sentiment"].map(sentiment_map)
 
-if not assets_df.empty:
-    unique_assets = sorted(assets_df["asset"].dropna().unique())
+assets_df["risk_score"] = (
+    assets_df["sentiment_score"] * assets_df["impact_score"]
+)
 
-    selected_assets = st.multiselect(
-        "🔎 Varlık Filtresi",
-        unique_assets,
-        default=unique_assets
-    )
+# -----------------------
+# 1️⃣ VARLIK ETKİ SKORU
+# -----------------------
 
-    assets_df = assets_df[assets_df["asset"].isin(selected_assets)]
+st.subheader("📊 Asset Impact Scores")
 
-# ========================
-# SUMMARY
-# ========================
+asset_scores = (
+    assets_df.groupby("asset")["impact_score"]
+    .mean()
+    .sort_values(ascending=False)
+    .reset_index()
+)
 
-st.subheader("🧠 Son Piyasa Özeti")
-st.write(latest["summary"])
+fig_asset = px.bar(
+    asset_scores,
+    x="asset",
+    y="impact_score"
+)
 
-# ========================
-# GRAPH: IMPACT SCORE
-# ========================
+st.plotly_chart(fig_asset, use_container_width=True)
 
-if not assets_df.empty:
+# -----------------------
+# 2️⃣ SENTIMENT HEATMAP
+# -----------------------
 
-    st.subheader("📈 Varlık Etki Skorları")
+st.subheader("🔥 Sentiment Heatmap")
 
-    pivot_df = (
-        assets_df
-        .pivot_table(
-            index="created_at",
-            columns="asset",
-            values="impact_score",
-            aggfunc="mean"
-        )
-        .sort_index()
-    )
+heatmap_df = (
+    assets_df.groupby(["asset", "sentiment"])
+    .size()
+    .unstack(fill_value=0)
+)
 
-    st.line_chart(pivot_df)
+fig_heat = px.imshow(heatmap_df)
 
-# ========================
-# SENTIMENT HEATMAP
-# ========================
+st.plotly_chart(fig_heat, use_container_width=True)
 
-if not assets_df.empty:
+# -----------------------
+# 3️⃣ GLOBAL SENTIMENT SCORE
+# -----------------------
 
-    st.subheader("🔥 Sentiment Heatmap")
+st.subheader("🌍 Sentiment Weighted Global Score")
 
-    sentiment_map = {
-        "positive": 1,
-        "neutral": 0,
-        "negative": -1
+global_score = assets_df["risk_score"].mean()
+
+st.metric("Global Score", round(global_score, 3))
+
+# -----------------------
+# 4️⃣ EMA RISK GAUGE
+# -----------------------
+
+st.subheader("⚠️ Global Risk Gauge (EMA)")
+
+daily_risk = (
+    assets_df.groupby("date")["risk_score"]
+    .mean()
+    .sort_index()
+)
+
+ema_risk = daily_risk.ewm(span=3, adjust=False).mean()
+
+current_risk = ema_risk.iloc[-1]
+
+fig_gauge = go.Figure(go.Indicator(
+    mode="gauge+number",
+    value=current_risk,
+    title={"text": "Market Risk EMA"},
+    gauge={
+        "axis": {"range": [-1, 1]},
+        "steps": [
+            {"range": [-1, -0.3]},
+            {"range": [-0.3, 0.3]},
+            {"range": [0.3, 1]}
+        ]
     }
+))
 
-    heat_df = assets_df.copy()
-    heat_df["sentiment_score"] = heat_df["sentiment"].map(sentiment_map)
+st.plotly_chart(fig_gauge, use_container_width=True)
 
-    heat_pivot = (
-        heat_df
-        .pivot_table(
-            index="created_at",
-            columns="asset",
-            values="sentiment_score",
-            aggfunc="mean"
-        )
-        .sort_index()
-    )
+# Risk label
+def risk_label(score):
+    if score > 0.3:
+        return "🟢 Risk On"
+    elif score < -0.3:
+        return "🔴 Risk Off"
+    return "🟡 Neutral"
 
-    st.dataframe(heat_pivot)
+st.markdown(f"### Current Market Regime: {risk_label(current_risk)}")
 
-# ========================
-# DAILY IMPACT METRIC
-# ========================
+# -----------------------
+# 5️⃣ EMA TREND GRAPH
+# -----------------------
 
-if not assets_df.empty:
+st.subheader("📈 Risk Trend (EMA Only)")
 
-    st.subheader("📊 Günlük Ortalama Etki Skoru")
+ema_df = pd.DataFrame({
+    "EMA Risk": ema_risk
+})
 
-    daily_df = assets_df.copy()
-    daily_df["date"] = pd.to_datetime(daily_df["created_at"]).dt.date
+st.line_chart(ema_df)
 
-    metric_df = (
-        daily_df
-        .groupby("date")["impact_score"]
-        .mean()
-        .reset_index()
-        .set_index("date")
-    )
+# -----------------------
+# 6️⃣ SON AI RAPORLARI
+# -----------------------
 
-    st.line_chart(metric_df)
+st.subheader("🧠 Latest AI Reports")
 
-# ========================
-# RISK NOTES
-# ========================
-
-st.subheader("⚠️ Risk Notları")
-
-risks = latest["risk_notes"]
-
-if isinstance(risks, str):
-    risks = json.loads(risks)
-
-for r in risks:
-    st.write(f"- {r}")
-
-# ========================
-# RAW TABLE
-# ========================
-
-st.subheader("📋 Tüm Analiz Kayıtları")
-st.dataframe(df)
+for _, row in df.head(5).iterrows():
+    with st.expander(str(row["created_at"])):
+        st.write(row["summary"])
